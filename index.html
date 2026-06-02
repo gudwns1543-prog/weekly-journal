@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&display=swap" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root{
   --ink:#1c2530; --ink-soft:#54606c; --ink-faint:#94a0ab;
@@ -176,11 +177,53 @@ body{font-family:'Pretendard',sans-serif; background:var(--paper); color:var(--i
   .app{grid-template-columns:1fr;}
   .side{position:static; height:auto; border-right:none; border-bottom:2px solid var(--line);}
 }
+/* login overlay */
+.login-scrim{position:fixed; inset:0; background:#f5f7f9; display:flex; align-items:center; justify-content:center; z-index:100; padding:20px;}
+.login-card{background:var(--card); border:2px solid var(--ink); padding:40px 36px; max-width:380px; width:100%; box-shadow:8px 8px 0 rgba(20,35,55,.12);}
+.login-card h1{font-size:22px; font-weight:700; margin-bottom:6px; letter-spacing:-.4px;}
+.login-card p{font-size:13px; color:var(--ink-soft); margin-bottom:22px; line-height:1.6;}
+.gbtn{display:flex; align-items:center; justify-content:center; gap:10px; width:100%; padding:11px; border:2px solid var(--ink); background:var(--card); color:var(--ink); font-size:14px; font-weight:700; cursor:pointer; font-family:inherit;}
+.gbtn:hover{background:var(--ink); color:#fff;}
+.gbtn svg{width:18px; height:18px;}
+.login-err{margin-top:14px; padding:10px 12px; background:var(--sun-soft); color:var(--sun); font-size:12px; border:1px solid var(--sun); display:none;}
+.login-err.show{display:block;}
+.loading-scrim{position:fixed; inset:0; background:#f5f7f9; display:flex; align-items:center; justify-content:center; z-index:100; font-size:13px; color:var(--ink-soft);}
+/* user badge in sidebar */
+.userbar{display:flex; align-items:center; gap:8px; margin-bottom:12px; padding:8px 10px; border:1px solid var(--line); background:var(--paper); font-size:12px;}
+.userbar .uemail{flex:1; color:var(--ink-soft); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.userbar .signout{border:none; background:none; color:var(--accent); cursor:pointer; font-size:11px; font-weight:600;}
+.userbar .signout:hover{text-decoration:underline;}
+.sync-pill{position:fixed; bottom:14px; right:18px; background:var(--ink); color:#fff; padding:6px 12px; font-size:11px; font-weight:600; z-index:90; opacity:0; transition:opacity .2s; pointer-events:none;}
+.sync-pill.show{opacity:.85;}
 </style>
 </head>
 <body>
-<div class="app">
+
+<!-- 로딩 화면 -->
+<div class="loading-scrim" id="loadingScrim">불러오는 중…</div>
+
+<!-- 로그인 화면 -->
+<div class="login-scrim" id="loginScrim" style="display:none;">
+  <div class="login-card">
+    <h1>주간 생활 일지</h1>
+    <p>일정·식사·체중·수면·지출을 한 페이지에 기록합니다.<br>구글 계정으로 로그인하면 어느 기기에서나 동일한 기록을 보실 수 있어요.</p>
+    <button class="gbtn" id="googleSignIn">
+      <svg viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.83.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.32A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.72A5.4 5.4 0 0 1 3.68 9c0-.6.1-1.18.29-1.72V4.96H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.04l3.01-2.32z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58A8.99 8.99 0 0 0 9 0 9 9 0 0 0 .96 4.96l3.01 2.32C4.68 5.16 6.66 3.58 9 3.58z"/></svg>
+      Google로 로그인
+    </button>
+    <div class="login-err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- 동기화 상태 표시 -->
+<div class="sync-pill" id="syncPill">저장 중…</div>
+
+<div class="app" id="appRoot" style="display:none;">
   <aside class="side">
+    <div class="userbar" id="userbar">
+      <span class="uemail" id="uemail"></span>
+      <button class="signout" id="signOutBtn">로그아웃</button>
+    </div>
     <div class="brand">
       <div><h1>주간 생활 일지</h1></div>
     </div>
@@ -289,21 +332,89 @@ let logs={};
 let todosByWeek={};
 let habitsByWeek={};   // weekKey -> { order:[names], data:{name:[7]} }
 
-/* ── 임시 저장 (테스트용 localStorage) — 실배포 시 Supabase로 교체 ── */
-const LS_KEY='weekly_journal_v1';
-function saveState(){
-  try{ localStorage.setItem(LS_KEY, JSON.stringify({logs,todosByWeek,habitsByWeek,EXP_CHANNEL,EXP_STORE,EXP_CATEGORY})); }catch(e){}
+/* ── Supabase 클라우드 저장 ── */
+const SUPABASE_URL='https://wlevzuwhymfchtilgzal.supabase.co';
+const SUPABASE_KEY='sb_publishable_5PLATdknOOOxKrknQfUSUA_e7zJ5Qhz';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+let currentUser = null;
+
+// 디바운스: 짧은 시간 내 여러 입력 시 마지막에 한 번만 저장
+let saveTimer = null;
+let savePending = false;
+function showSync(text='저장 중…'){ const p=document.getElementById('syncPill'); p.textContent=text; p.classList.add('show'); }
+function hideSync(){ document.getElementById('syncPill').classList.remove('show'); }
+
+async function saveState(){
+  if(!currentUser) return;
+  savePending = true;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async ()=>{
+    showSync('저장 중…');
+    const rows = [
+      {user_id: currentUser.id, key:'logs', value:logs},
+      {user_id: currentUser.id, key:'todosByWeek', value:todosByWeek},
+      {user_id: currentUser.id, key:'habitsByWeek', value:habitsByWeek},
+      {user_id: currentUser.id, key:'expCategories', value:{ch:EXP_CHANNEL,store:EXP_STORE,cat:EXP_CATEGORY}},
+    ];
+    const {error} = await sb.from('journal_state').upsert(rows, {onConflict:'user_id,key'});
+    if(error){ console.error('save error',error); showSync('⚠ 저장 실패'); setTimeout(hideSync,2000); }
+    else { showSync('✓ 저장됨'); setTimeout(hideSync,1000); }
+    savePending = false;
+  }, 600);
 }
-function loadState(){
-  try{
-    const raw=localStorage.getItem(LS_KEY);
-    if(!raw) return false;
-    const s=JSON.parse(raw);
-    logs=s.logs||{}; todosByWeek=s.todosByWeek||{}; habitsByWeek=s.habitsByWeek||{};
-    if(s.EXP_CHANNEL)EXP_CHANNEL=s.EXP_CHANNEL; if(s.EXP_STORE)EXP_STORE=s.EXP_STORE; if(s.EXP_CATEGORY)EXP_CATEGORY=s.EXP_CATEGORY;
-    return true;
-  }catch(e){ return false; }
+
+async function loadState(){
+  if(!currentUser) return false;
+  const {data, error} = await sb.from('journal_state').select('key,value').eq('user_id', currentUser.id);
+  if(error){ console.error('load error',error); return false; }
+  if(!data || !data.length){ return false; }
+  const byKey = {};
+  data.forEach(r=>byKey[r.key]=r.value);
+  if(byKey.logs) logs = byKey.logs;
+  if(byKey.todosByWeek) todosByWeek = byKey.todosByWeek;
+  if(byKey.habitsByWeek) habitsByWeek = byKey.habitsByWeek;
+  if(byKey.expCategories){
+    const c = byKey.expCategories;
+    if(c.ch) EXP_CHANNEL = c.ch;
+    if(c.store) EXP_STORE = c.store;
+    if(c.cat) EXP_CATEGORY = c.cat;
+  }
+  return true;
 }
+
+/* ── 인증 흐름 ── */
+async function startApp(){
+  document.getElementById('loadingScrim').style.display='flex';
+  document.getElementById('loginScrim').style.display='none';
+  document.getElementById('appRoot').style.display='none';
+  await loadState();
+  document.getElementById('uemail').textContent = currentUser.email || '';
+  document.getElementById('loadingScrim').style.display='none';
+  document.getElementById('appRoot').style.display='grid';
+  renderAll();
+}
+
+function showLogin(msg){
+  document.getElementById('loadingScrim').style.display='none';
+  document.getElementById('appRoot').style.display='none';
+  document.getElementById('loginScrim').style.display='flex';
+  if(msg){ const e=document.getElementById('loginErr'); e.textContent=msg; e.classList.add('show'); }
+}
+
+document.getElementById('googleSignIn').onclick=async ()=>{
+  const {error} = await sb.auth.signInWithOAuth({
+    provider:'google',
+    options:{ redirectTo: window.location.origin }
+  });
+  if(error){ document.getElementById('loginErr').textContent='로그인 실패: '+error.message; document.getElementById('loginErr').classList.add('show'); }
+};
+document.getElementById('signOutBtn').onclick=async ()=>{
+  if(!confirm('로그아웃 하시겠어요?')) return;
+  // 저장 진행 중이면 잠시 대기
+  if(savePending) await new Promise(r=>setTimeout(r,800));
+  await sb.auth.signOut();
+  location.reload();
+};
 
 function blankLog(){return {work:[], pers:[], meals:{b:'',l:'',d:'',s:'',n:''}, wtAm:'',wtPm:'',wake:'',sleep:'', exr:[], exp:[]};}
 function normItems(arr){ // accept ['text'] or [{t,done}] -> [{t,done}]
@@ -336,9 +447,29 @@ function getHabits(wk){
   return habitsByWeek[wk];
 }
 
-(function init(){
-  loadState(); // load saved state from localStorage if present; otherwise start empty
+/* 부팅: 세션 확인 → 로그인 화면 또는 앱 시작 */
+(async function boot(){
+  const {data:{session}} = await sb.auth.getSession();
+  if(session && session.user){
+    currentUser = session.user;
+    await startApp();
+  } else {
+    showLogin();
+  }
+  // 로그인 상태 변화 감지 (OAuth 콜백 후 자동 진입)
+  sb.auth.onAuthStateChange(async (event, session)=>{
+    if(event==='SIGNED_IN' && session && session.user){
+      if(!currentUser || currentUser.id !== session.user.id){
+        currentUser = session.user;
+        await startApp();
+      }
+    } else if(event==='SIGNED_OUT'){
+      currentUser = null;
+      showLogin();
+    }
+  });
 })();
+
 
 let curMonday=mondayOf(new Date());
 let calMonth=new Date(curMonday.getFullYear(), curMonday.getMonth(), 1);
@@ -682,7 +813,6 @@ document.getElementById('esave').onclick=()=>{
 function renderAll(){
   renderCal(); renderTodos(); renderHabits(); renderMain();
 }
-renderAll();
 </script>
 </body>
 </html>
